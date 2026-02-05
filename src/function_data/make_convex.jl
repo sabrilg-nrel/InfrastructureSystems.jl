@@ -6,7 +6,8 @@
 # Functions for removing artificial segmentation from piecewise curves.
 # ============================================================================
 
-const _COLINEARITY_TOLERANCE = 1e-6
+const _COLINEARITY_TOLERANCE = 1e-1
+const _NEG_SLOPE_COMPARISON_ATOL = 1e-1
 
 """
     merge_colinear_segments(curve::ValueCurve; ε::Float64 = _COLINEARITY_TOLERANCE, generator_name::Union{String, Nothing} = nothing) -> ValueCurve
@@ -214,7 +215,7 @@ end
 # ============================================================================
 # CONVEXIFICATION UTILITIES
 # ============================================================================
-
+#=
 """
     increasing_curve_convex_approximation(curve::ValueCurve; kwargs...) -> Union{ValueCurve, Nothing}
 
@@ -436,6 +437,155 @@ function increasing_curve_convex_approximation(cost::FuelCurve; kwargs...)
         vom_cost = get_vom_cost(cost),
     )
 end
+=#
+
+function convexify_function end
+
+function convexify_function(
+    curve::InputOutputCurve{PiecewiseLinearData};
+    weights::Symbol = :length,
+    anchor::Symbol = :first,
+    merge_colinear::Bool = true,
+    generator_name::Union{String, Nothing} = nothing,
+    negative_slope_tolerance::Float64 = _NEG_SLOPE_COMPARISON_ATOL,
+    _skip_validation::Bool = false,
+)
+    gen_msg = isnothing(generator_name) ? "" : " for generator $(generator_name)"
+
+    # Validate negative slopes with tolerance
+    if !_skip_validation && !validate_negative_slope_with_tolerance(curve, negative_slope_tolerance)
+        @error "Curve rejected before convexification$(gen_msg) due to negative slopes exceeding tolerance"
+        return nothing
+    end
+
+    # Hard data-quality validation
+    if !_skip_validation && !is_valid_data(curve)
+        @error "Invalid curve data$(gen_msg): data quality validation failed"
+        return nothing
+    end
+
+    # If already convex, optionally clean up colinear segments and return
+    if is_convex(curve)
+        return merge_colinear ? merge_colinear_segments(curve; generator_name = generator_name) : curve
+    end
+
+    # Convexify
+    fd = get_function_data(curve)
+    points = get_points(fd)
+    x_coords = get_x_coords(fd)
+    slopes = get_slopes(fd)
+
+    w = _compute_convex_weights(x_coords, weights)
+    new_slopes = isotonic_regression(slopes, w)
+    new_points = _reconstruct_points(points, new_slopes, anchor)
+
+    @warn "Transformed non-convex InputOutputCurve to convex approximation$(gen_msg)"
+    result = InputOutputCurve(PiecewiseLinearData(new_points), get_input_at_zero(curve))
+
+    # Clean up any colinear segments (from original data or produced by isotonic regression)
+    return merge_colinear ? merge_colinear_segments(result; generator_name = generator_name) : result
+end
+
+
+function convexify_function(
+    curve::IncrementalCurve{PiecewiseStepData},
+    weights::Symbol = :length,
+    anchor::Symbol = :first,
+    merge_colinear::Bool = true,
+    generator_name::Union{String, Nothing} = nothing,
+    negative_slope_tolerance::Float64 = _NEG_SLOPE_COMPARISON_ATOL,
+    _skip_validation::Bool = false,
+)
+    gen_msg = isnothing(generator_name) ? "" : " for generator $(generator_name)"
+
+    # Validate negative slopes with tolerance
+    if !_skip_validation && !validate_negative_slope_with_tolerance(curve, negative_slope_tolerance)
+        @error "Curve rejected before convexification$(gen_msg) due to negative slopes exceeding tolerance"
+        return nothing
+    end
+
+    # Hard data-quality validation
+    if !_skip_validation && !is_valid_data(curve)
+        @error "Invalid curve data$(gen_msg): data quality validation failed"
+        return nothing
+    end
+
+    # If already convex, optionally clean up colinear segments and return
+    if is_convex(curve)
+        return merge_colinear ? merge_colinear_segments(curve; generator_name = generator_name) : curve
+    end
+
+    # Convert to InputOutputCurve, make convex, convert back
+    io_curve = InputOutputCurve(curve)
+    convex_io = convexify_function(
+        io_curve;
+        weights = weights,
+        anchor = anchor,
+        merge_colinear = false,
+        generator_name = generator_name,
+        negative_slope_tolerance::Float64 = _NEG_SLOPE_COMPARISON_ATOL,
+        _skip_validation = true,  # Already validated above
+    )
+
+    isnothing(convex_io) && return nothing
+
+    @warn "Transformed non-convex IncrementalCurve to convex approximation$(gen_msg)"
+    result = IncrementalCurve(convex_io)
+
+    # Clean up any colinear segments (from original data or produced by convexification)
+    return merge_colinear ? merge_colinear_segments(result; generator_name = generator_name) : result
+end
+
+
+function convexify_function(
+    curve::AverageRateCurve{PiecewiseStepData};
+    weights::Symbol = :length,
+    anchor::Symbol = :first,
+    merge_colinear::Bool = true,
+    negative_slope_tolerance::Float64 = _NEG_SLOPE_COMPARISON_ATOL,
+    generator_name::Union{String, Nothing} = nothing,
+    _skip_validation::Bool = false,
+)
+    gen_msg = isnothing(generator_name) ? "" : " for generator $(generator_name)"
+
+    # Validate negative slopes with tolerance
+    if !_skip_validation && !validate_negative_slope_with_tolerance(curve, negative_slope_tolerance)
+        @error "Curve rejected before convexification$(gen_msg) due to negative slopes exceeding tolerance"
+        return nothing
+    end
+
+    # Hard data-quality validation
+    if !_skip_validation && !is_valid_data(curve)
+        @error "Invalid curve data$(gen_msg): data quality validation failed"
+        return nothing
+    end
+
+    # If already convex, optionally clean up colinear segments and return
+    if is_convex(curve)
+        return merge_colinear ? merge_colinear_segments(curve; generator_name = generator_name) : curve
+    end
+
+   # Convert to InputOutputCurve, make convex, convert back
+   io_curve = InputOutputCurve(curve)
+   convex_io = convexify_function(
+       io_curve;
+       weights = weights,
+       anchor = anchor,
+       merge_colinear = false,
+       generator_name = generator_name,
+       negative_slope_tolerance::Float64 = _NEG_SLOPE_COMPARISON_ATOL,
+       _skip_validation = true,  # Already validated above
+   )
+
+   isnothing(convex_io) && return nothing
+
+   @warn "Transformed non-convex IncrementalCurve to convex approximation$(gen_msg)"
+   result = IncrementalCurve(convex_io)
+
+   # Clean up any colinear segments (from original data or produced by convexification)
+   return merge_colinear ? merge_colinear_segments(result; generator_name = generator_name) : result
+end
+
 
 """
     _reconstruct_points(original_points, new_slopes, anchor) -> Vector{XY_COORDS}

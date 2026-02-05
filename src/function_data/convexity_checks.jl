@@ -2,6 +2,7 @@
 # Functions for analyzing convexity properties of FunctionData and ValueCurve types.
 
 const _SLOPE_COMPARISON_ATOL = 1e-10
+const _NEG_SLOPE_COMPARISON_ATOL = 1e-1
 
 # ============================================================================
 # DATA QUALITY VALIDATION
@@ -193,6 +194,63 @@ end
 # Functions for checking if curves are strictly increasing or decreasing.
 # Note: QuadraticFunctionData is excluded as slope sign varies with x.
 # ============================================================================
+
+"""
+    validate_negative_slope_with_tolerance(data, tol::Float64) -> Bool
+
+Returns true if all slopes are >= -tol.
+Logs a warning if small negative slopes are detected.
+Logs an error and returns false if violation exceeds tolerance.
+"""
+function validate_negative_slope_with_tolerance end
+
+# FunctionData implementations
+function validate_negative_slope_with_tolerance(fd::LinearFunctionData, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL)
+    slope = get_proportional_term(fd)
+
+    if slope < -tol
+        @error "Slope too negative for convexification" slope tolerance = tol
+        return false
+    elseif slope < 0
+        @warn "Small negative slope tolerated for convexification" slope tolerance = tol
+    end
+
+    return true
+end
+
+function validate_negative_slope_with_tolerance(fd::PiecewiseLinearData, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL)
+    for (i, s) in enumerate(get_slopes(fd))
+        if s < -tol
+            @error "Slope too negative for convexification" slope = s segment = i tolerance = tol
+            return false
+        elseif s < 0
+            @warn "Small negative slope tolerated for convexification" slope = s segment = i tolerance = tol
+        end
+    end
+    return true
+end
+
+function validate_negative_slope_with_tolerance(fd::PiecewiseStepData, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL)
+    for (i, r) in enumerate(get_y_coords(fd))
+        if r < -tol
+            @error "Marginal rate too negative for convexification" rate = r segment = i tolerance = tol
+            return false
+        elseif r < 0
+            @warn "Small negative marginal rate tolerated for convexification" rate = r segment = i tolerance = tol
+        end
+    end
+    return true
+end
+
+# ValueCurve implementations
+validate_negative_slope_with_tolerance(curve::InputOutputCurve, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL) =
+    validate_negative_slope_with_tolerance(get_function_data(curve), tol)
+
+validate_negative_slope_with_tolerance(curve::IncrementalCurve, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL) =
+    validate_negative_slope_with_tolerance(get_function_data(curve), tol)
+
+validate_negative_slope_with_tolerance(curve::AverageRateCurve, tol::Float64 = _NEG_SLOPE_COMPARISON_ATOL) =
+    validate_negative_slope_with_tolerance(InputOutputCurve(curve), tol)
 
 """
     is_strictly_increasing(data::FunctionData) -> Bool
